@@ -71,6 +71,7 @@ COPY server.js ./
 COPY camofox.config.json ./
 COPY lib/ ./lib/
 COPY plugins/ ./plugins/
+COPY public/ ./public/
 COPY scripts/ ./scripts/
 
 # Install default plugin dependencies

@@ -1,0 +1,22 @@
+services:
+  camofox-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile.ci
+    restart: unless-stopped
+    ports:
+      - "9377:9377"
+    volumes:
+      - screenshots:/app/screenshots
+      - camofox_data:/root/.camofox
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - CAMOFOX_PORT=9377
+    mem_limit: 1g
+    shm_size: 256m
+
+volumes:
+  screenshots:
+  camofox_data:
