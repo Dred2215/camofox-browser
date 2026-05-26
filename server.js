@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { Camoufox, launchOptions } from 'camoufox-js';
 import { VirtualDisplay } from 'camoufox-js/dist/virtdisplay.js';
 import { firefox } from 'playwright-core';
