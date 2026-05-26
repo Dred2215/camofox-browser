@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>camofox-browser UI</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #070e1a; color: #e8f0ff; min-height: 100vh; }
+
+    header {
+      background: #0b1628;
+      border-bottom: 1px solid #1a2a42;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 18px; font-weight: 600; color: #b366ff; }
+    header span { font-size: 13px; color: #5a7394; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px; display: flex; flex-direction: column; gap: 28px; }
+
+    .card {
+      background: #0b1628;
+      border: 1px solid #1a2a42;
+      border-radius: 10px;
+      padding: 24px;
+    }
+    .card h2 { font-size: 14px; font-weight: 600; color: #8ba3c7; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px; }
+
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+    select {
+      background: #0f1d33;
+      border: 1px solid #1a2a42;
+      color: #e8f0ff;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 14px;
+      flex: 1;
+      min-width: 200px;
+      cursor: pointer;
+    }
+    select:focus { outline: none; border-color: #9b30ff; }
+
+    button {
+      background: #9b30ff;
+      color: #fff;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+      white-space: nowrap;
+    }
+    button:hover { background: #b366ff; }
+    button:disabled { background: #243550; color: #5a7394; cursor: default; }
+
+    .badge {
+      display: inline-block;
+      background: #0f1d33;
+      border: 1px solid #1a2a42;
+      color: #8ba3c7;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+
+    #status { font-size: 13px; color: #8ba3c7; margin-top: 12px; min-height: 20px; }
+    #status.ok { color: #22c55e; }
+    #status.err { color: #ef4444; }
+
+    #preview { margin-top: 16px; }
+    #preview img {
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #1a2a42;
+      display: none;
+    }
+
+    .history-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 4px;
+    }
+    .history-item {
+      background: #0f1d33;
+      border: 1px solid #1a2a42;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color .15s;
+    }
+    .history-item:hover { border-color: #9b30ff; }
+    .history-item img { width: 100%; height: 130px; object-fit: cover; display: block; background: #070e1a; }
+    .history-item .info { padding: 10px 12px; }
+    .history-item .info .tab-id { font-size: 11px; color: #5a7394; font-family: monospace; word-break: break-all; }
+    .history-item .info .url { font-size: 12px; color: #8ba3c7; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .history-item .info .ts { font-size: 11px; color: #5a7394; margin-top: 4px; }
+
+    .empty { color: #5a7394; font-size: 14px; text-align: center; padding: 32px 0; }
+
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.8);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-overlay img { max-width: 90vw; max-height: 90vh; border-radius: 8px; border: 1px solid #1a2a42; }
+    .modal-overlay .close { position: absolute; top: 20px; right: 24px; font-size: 28px; color: #e8f0ff; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>camofox-browser</h1>
+  <span>UI de capturas</span>
+  <div style="margin-left:auto" id="server-status" class="badge">conectando...</div>
+</header>
+
+<div class="container">
+
+  <div class="card">
+    <h2>Capturar screenshot</h2>
+    <div class="row">
+      <select id="tab-select">
+        <option value="">Carregando tabs...</option>
+      </select>
+      <button id="btn-refresh-tabs" onclick="loadTabs()">Atualizar tabs</button>
+      <button id="btn-capture" onclick="capture()" disabled>Capturar</button>
+    </div>
+    <div id="status"></div>
+    <div id="preview"><img id="preview-img" alt="screenshot"></div>
+  </div>
+
+  <div class="card">
+    <h2>Plugins disponíveis</h2>
+    <div id="actions-grid" style="display:flex;flex-direction:column;gap:16px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Histórico de capturas</h2>
+    <div id="history-grid" class="history-grid"></div>
+  </div>
+
+</div>
+
+<div class="modal-overlay" id="modal" onclick="closeModal()">
+  <span class="close">&times;</span>
+  <img id="modal-img" src="" alt="">
+</div>
+
+<script>
+  const API = '';
+
+  const nc = () => `_=${Date.now()}`;
+  const AUTO = { headers: { 'X-Source': 'ui-auto' } };
+  const USER = { headers: { 'X-Source': 'ui-user' } };
+  const userPost = (extra = {}) => ({ method: 'POST', ...extra, headers: { 'X-Source': 'ui-user', ...(extra.headers || {}) } });
+  const autoPost = (extra = {}) => ({ method: 'POST', ...extra, headers: { 'X-Source': 'ui-auto', ...(extra.headers || {}) } });
+
+  async function checkServer() {
+    try {
+      const r = await fetch(`${API}/health?${nc()}`, AUTO);
+      const d = await r.json();
+      const el = document.getElementById('server-status');
+      el.textContent = d.ok ? '🟢 online' : '🔴 offline';
+      el.style.color = d.ok ? '#22c55e' : '#ef4444';
+    } catch {
+      document.getElementById('server-status').textContent = '🔴 offline';
+    }
+  }
+
+  async function loadTabs() {
+    const sel = document.getElementById('tab-select');
+    const btn = document.getElementById('btn-capture');
+    try {
+      const r = await fetch(`${API}/tabs?${nc()}`, AUTO);
+      const d = await r.json();
+      const tabs = d.tabs || [];
+      sel.innerHTML = tabs.length
+        ? tabs.map(t => `<option value="${t.tabId}" data-user="${t.userId || ''}">[${t.userId || t.listItemId}] ${t.title || t.url}</option>`).join('')
+        : '<option value="">Nenhuma tab aberta</option>';
+      btn.disabled = tabs.length === 0;
+    } catch {
+      sel.innerHTML = '<option value="">Erro ao carregar tabs</option>';
+      btn.disabled = true;
+    }
+  }
+
+  async function capture() {
+    const sel = document.getElementById('tab-select');
+    const tabId = sel.value;
+    if (!tabId) return;
+    const userId = sel.selectedOptions[0]?.dataset.user || 'startup';
+
+    const btn = document.getElementById('btn-capture');
+    const img = document.getElementById('preview-img');
+
+    btn.disabled = true;
+    setStatus('Capturando...', '');
+
+    try {
+      const r = await fetch(`${API}/tabs/${tabId}/capture?userId=${userId}&${nc()}`, userPost());
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+      setStatus(`Salvo em: ${d.path}  •  ${(d.sizeBytes/1024).toFixed(1)} KB`, 'ok');
+
+      img.src = `/screenshots/${tabId}/screenshot.png?t=${Date.now()}`;
+      img.style.display = 'block';
+      img.onclick = () => openModal(img.src);
+
+      loadHistory();
+    } catch (e) {
+      setStatus(`Erro: ${e.message}`, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function loadHistory() {
+    const grid = document.getElementById('history-grid');
+    try {
+      const r = await fetch(`${API}/captures?${nc()}`, AUTO);
+      const d = await r.json();
+      const captures = d.captures || [];
+
+      if (captures.length === 0) {
+        grid.innerHTML = '<div class="empty">Nenhuma captura ainda</div>';
+        return;
+      }
+
+      grid.innerHTML = captures.map(c => `
+        <div class="history-item" onclick="openModal('/screenshots/${c.tabId}/screenshot.png')">
+          <img src="/screenshots/${c.tabId}/screenshot.png" alt="" onerror="this.style.background='#0f1d33'">
+          <div class="info">
+            <div class="tab-id">${c.tabId}</div>
+            <div class="url">${c.url || ''}</div>
+            <div class="ts">${c.timestamp ? new Date(c.timestamp).toLocaleString('pt-BR') : ''}</div>
+          </div>
+        </div>
+      `).join('');
+    } catch {
+      grid.innerHTML = '<div class="empty">Erro ao carregar histórico</div>';
+    }
+  }
+
+  function setStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = type;
+  }
+
+  function openModal(src) {
+    document.getElementById('modal-img').src = src;
+    document.getElementById('modal').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+  }
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  async function loadActions() {
+    const grid = document.getElementById('actions-grid');
+    try {
+      const r = await fetch(`${API}/actions?${nc()}`, AUTO);
+      const d = await r.json();
+      const actions = d.actions || [];
+
+      if (actions.length === 0) {
+        grid.innerHTML = '<div class="empty">Nenhum plugin registrado</div>';
+        return;
+      }
+
+      grid.innerHTML = actions.map(a => `
+        <div class="card" style="background:#0f1d33;border-color:#243550;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div>
+              <div style="font-weight:600;font-size:15px;">${a.label}</div>
+              <div style="font-size:12px;color:#5a7394;margin-top:2px;">${a.description}</div>
+            </div>
+            <button onclick="runAction('${a.name}')" id="btn-action-${a.name}">Executar</button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;" id="fields-${a.name}">
+            ${a.fields.map(f => `
+              <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px;">
+                <label style="font-size:12px;color:#8ba3c7;">${f.label}${f.required ? ' *' : ''}</label>
+                ${f.type === 'select' ? `
+                <select
+                  id="field-${a.name}-${f.name}"
+                  style="background:#070e1a;border:1px solid #1a2a42;color:#e8f0ff;padding:8px 12px;border-radius:6px;font-size:14px;"
+                >
+                  ${(f.options || []).map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
+                </select>
+                ` : `
+                <input
+                  id="field-${a.name}-${f.name}"
+                  type="${f.type || 'text'}"
+                  placeholder="${f.placeholder || f.default || ''}"
+                  value="${f.default || ''}"
+                  style="background:#070e1a;border:1px solid #1a2a42;color:#e8f0ff;padding:8px 12px;border-radius:6px;font-size:14px;"
+                >
+                `}
+              </div>
+            `).join('')}
+          </div>
+          <div id="result-${a.name}" style="margin-top:10px;font-size:13px;"></div>
+          <img id="preview-${a.name}" src="" alt="" style="display:none;max-width:100%;margin-top:12px;border-radius:6px;border:1px solid #1a2a42;cursor:pointer;">
+        </div>
+      `).join('');
+    } catch (e) {
+      grid.innerHTML = `<div class="empty">Erro: ${e.message}</div>`;
+    }
+  }
+
+  async function runAction(name) {
+    const btn = document.getElementById(`btn-action-${name}`);
+    const resultEl = document.getElementById(`result-${name}`);
+    const previewEl = document.getElementById(`preview-${name}`);
+    btn.disabled = true;
+    resultEl.style.color = '#8ba3c7';
+    resultEl.textContent = 'Executando...';
+
+    const body = {};
+    document.querySelectorAll(`[id^="field-${name}-"]`).forEach(input => {
+      const fieldName = input.id.replace(`field-${name}-`, '');
+      if (input.value) body[fieldName] = input.value;
+    });
+
+    try {
+      const r = await fetch(`${API}/actions/${name}/run?${nc()}`, userPost({
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }));
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+      resultEl.style.color = '#22c55e';
+      if (Array.isArray(d.steps) && d.steps.length) {
+        resultEl.innerHTML = d.steps.map(s => `<div style="padding:2px 0">${s}</div>`).join('');
+      } else {
+        resultEl.textContent = `Concluído — ${d.url || ''}`;
+      }
+
+      if (d.screenshotPath) {
+        previewEl.src = `${d.screenshotPath}?t=${Date.now()}`;
+        previewEl.style.display = 'block';
+        previewEl.onclick = () => openModal(previewEl.src);
+      }
+
+      loadHistory();
+    } catch (e) {
+      resultEl.style.color = '#ef4444';
+      resultEl.textContent = `Erro: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  checkServer();
+  loadTabs();
+  loadHistory();
+  loadActions();
+  setInterval(checkServer, 10000);
+</script>
+</body>
+</html>
