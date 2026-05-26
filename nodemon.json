@@ -1,0 +1,6 @@
+{
+  "watch": ["server.js", "plugins", "public", "camofox.config.json", ".env"],
+  "ext": "js,json,html",
+  "ignore": ["screenshots", "node_modules"],
+  "delay": 500
+}

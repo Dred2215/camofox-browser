@@ -5,6 +5,13 @@
   "plugins": {
     "youtube": { "enabled": true },
     "persistence": { "enabled": true },
-    "vnc": { "enabled": false, "resolution": "1920x1080" }
+    "vnc": { "enabled": false, "resolution": "1920x1080" },
+    "browse":    { "enabled": false },
+    "automate":  { "enabled": true },
+    "verify":    { "enabled": true },
+    "inspect":   { "enabled": true },
+    "sanx":      { "enabled": true },
+    "interact":  { "enabled": false },
+    "automation": { "enabled": false }
   }
 }
