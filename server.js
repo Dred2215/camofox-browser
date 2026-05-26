@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { join } from 'path';
 import { Camoufox, launchOptions } from 'camoufox-js';
 import { VirtualDisplay } from 'camoufox-js/dist/virtdisplay.js';
 import { firefox } from 'playwright-core';
@@ -93,19 +94,72 @@ const {
 } = await initMetrics({ enabled: CONFIG.prometheusEnabled });
 
 // --- Structured logging ---
+// ANSI color helpers — only applied when stdout/stderr is a real TTY
+const _isTTY = process.stdout.isTTY;
+const _c = {
+  reset:  '\x1b[0m',
+  dim:    '\x1b[2m',
+  bold:   '\x1b[1m',
+  red:    '\x1b[31m',
+  green:  '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue:   '\x1b[34m',
+  cyan:   '\x1b[36m',
+  white:  '\x1b[97m',
+  gray:   '\x1b[90m',
+};
+const c = _isTTY ? _c : Object.fromEntries(Object.keys(_c).map(k => [k, '']));
+
+const _levelColor  = { info: c.cyan, warn: c.yellow, error: c.red, debug: c.gray };
+const _sourceColor = { 'ui-user': c.green, 'ui-auto': c.gray, api: c.blue };
+const _methodColor = { GET: c.gray, POST: c.green, DELETE: c.red, PUT: c.yellow, PATCH: c.yellow };
+
+function _fmt(val) {
+  if (val === null || val === undefined) return String(val);
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val);
+}
+
 function log(level, msg, fields = {}) {
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    msg,
-    ...fields,
-  };
-  const line = JSON.stringify(entry);
-  if (level === 'error') {
-    process.stderr.write(line + '\n');
-  } else {
-    process.stdout.write(line + '\n');
+  const out = level === 'error' ? process.stderr : process.stdout;
+
+  // Non-TTY: keep structured JSON for log aggregators / pipes
+  if (!_isTTY) {
+    out.write(JSON.stringify({ ts: new Date().toISOString(), level, msg, ...fields }) + '\n');
+    return;
   }
+
+  const time = new Date().toTimeString().slice(0, 8);
+  const lvlColor = _levelColor[level] || c.white;
+  const lvl = `${lvlColor}${level.toUpperCase().padEnd(5)}${c.reset}`;
+  const ts  = `${c.dim}${time}${c.reset}`;
+
+  let body = '';
+
+  if (msg === 'req') {
+    const { method = '', path = '', source, userId, reqId } = fields;
+    const mColor  = _methodColor[method] || c.white;
+    const srcColor = _sourceColor[source] || c.white;
+    const src  = source ? ` ${c.dim}[${srcColor}${source}${c.dim}]${c.reset}` : '';
+    const user = userId && userId !== '-' ? `  ${c.dim}user=${c.reset}${userId}` : '';
+    const id   = reqId ? `  ${c.dim}${reqId}${c.reset}` : '';
+    body = `${c.dim}→${c.reset} ${mColor}${method.padEnd(7)}${c.reset}${c.white}${path}${c.reset}${src}${user}${id}`;
+
+  } else if (msg === 'res') {
+    const { status = 0, ms = 0, reqId } = fields;
+    const sColor = status >= 500 ? c.red : status >= 400 ? c.yellow : status >= 300 ? c.gray : c.green;
+    const id = reqId ? `  ${c.dim}${reqId}${c.reset}` : '';
+    body = `${c.dim}←${c.reset} ${sColor}${status}${c.reset}  ${c.dim}${ms}ms${c.reset}${id}`;
+
+  } else {
+    const msgStr = msg.padEnd(24);
+    const extras = Object.entries(fields)
+      .map(([k, v]) => `${c.dim}${k}=${c.reset}${_fmt(v)}`)
+      .join('  ');
+    body = `${c.white}${msgStr}${c.reset}  ${extras}`;
+  }
+
+  out.write(`${ts} ${lvl}  ${body}\n`);
 }
 
 const app = express();
@@ -118,8 +172,9 @@ app.use((req, res, next) => {
   req.startTime = Date.now();
 
   const userId = req.body?.userId || req.query?.userId || '-';
+  const source = req.headers['x-source'] || 'api';
   if (req.path !== '/health') {
-    log('info', 'req', { reqId, method: req.method, path: req.path, userId });
+    log('info', 'req', { reqId, method: req.method, path: req.path, userId, source });
   }
 
   const action = actionFromReq(req);
@@ -2563,7 +2618,7 @@ app.post('/pressure/cleanup', authMiddleware(), async (req, res) => {
  */
 app.post('/tabs', async (req, res) => {
   try {
-    const { userId, sessionKey, listItemId, url, trace } = req.body;
+    const { userId, sessionKey, listItemId, url, trace, capture } = req.body;
     // Accept both sessionKey (preferred) and listItemId (legacy) for backward compatibility
     const resolvedSessionKey = sessionKey || listItemId;
     if (!userId || !resolvedSessionKey) {
@@ -2653,6 +2708,21 @@ app.post('/tabs', async (req, res) => {
       
       pluginEvents.emit('tab:created', { userId, tabId, page, url: page.url() });
       log('info', 'tab created', { reqId: req.reqId, tabId, userId, sessionKey: resolvedSessionKey, url: page.url() });
+
+      if (capture) {
+        const timestamp = new Date().toISOString();
+        await tabState.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        const buffer = await tabState.page.screenshot({ type: 'png', fullPage: true });
+        const captureDir = join(process.cwd(), 'screenshots', tabId);
+        await fs.promises.mkdir(captureDir, { recursive: true });
+        await fs.promises.writeFile(join(captureDir, 'screenshot.png'), buffer);
+        const metadata = { tabId, userId, url: tabState.page.url(), timestamp, sizeBytes: buffer.length };
+        await fs.promises.writeFile(join(captureDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
+        pluginEvents.emit('tab:screenshot', { userId, tabId, buffer });
+        log('info', 'capture saved inline', { reqId: req.reqId, tabId, path: captureDir });
+        return { tabId, url: metadata.url, captured: true, timestamp, sizeBytes: buffer.length, path: captureDir, screenshotPath: `/screenshots/${tabId}/screenshot.png` };
+      }
+
       return { tabId, url: page.url() };
     })(), requestTimeoutMs(), 'tab create');
 
@@ -4262,6 +4332,50 @@ app.get('/tabs/:tabId/screenshot', async (req, res) => {
   }
 });
 
+// Capture: salva screenshot + metadata em disco
+app.post('/tabs/:tabId/capture', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.body?.userId;
+    const tabId = req.params.tabId;
+
+    // Busca a tab na sessão do userId informado; se não achar, varre todas as sessões
+    let session = sessions.get(normalizeUserId(userId));
+    let found = session && findTab(session, tabId);
+    if (!found) {
+      for (const [, s] of sessions) {
+        const f = findTab(s, tabId);
+        if (f) { found = f; session = s; break; }
+      }
+    }
+    if (!found) return tabNotFoundResponse(res, tabId);
+    session.lastAccess = Date.now();
+
+    const { tabState } = found;
+    const timestamp = new Date().toISOString();
+
+    // Aguarda a página (e iframes) estabilizarem antes de capturar
+    await tabState.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+
+    await tabState.page.setViewportSize({ width: 1280, height: 720 });
+    const buffer = await tabState.page.screenshot({ type: 'png', fullPage: true });
+
+    const captureDir = join(process.cwd(), 'screenshots', tabId);
+    await fs.promises.mkdir(captureDir, { recursive: true });
+    await fs.promises.writeFile(join(captureDir, 'screenshot.png'), buffer);
+
+    const metadata = { tabId, userId, url: tabState.page.url(), timestamp, sizeBytes: buffer.length };
+    await fs.promises.writeFile(join(captureDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
+
+    pluginEvents.emit('tab:screenshot', { userId, tabId, buffer });
+    log('info', 'capture saved', { reqId: req.reqId, tabId, path: captureDir });
+
+    res.json({ ok: true, tabId, url: metadata.url, timestamp, sizeBytes: buffer.length, path: captureDir });
+  } catch (err) {
+    log('error', 'capture failed', { reqId: req.reqId, error: err.message });
+    handleRouteError(err, req, res);
+  }
+});
+
 // Stats
 /**
  * @openapi
@@ -5218,25 +5332,27 @@ app.get('/', (req, res) => {
 app.get('/tabs', async (req, res) => {
   try {
     const userId = req.query.userId;
-    const session = sessions.get(normalizeUserId(userId));
-    
-    if (!session) {
-      return res.json({ running: true, tabs: [] });
-    }
-    
     const tabs = [];
-    for (const [listItemId, group] of session.tabGroups) {
-      for (const [tabId, tabState] of group) {
-        tabs.push({
-          targetId: tabId,
-          tabId,
-          url: tabState.page.url(),
-          title: await tabState.page.title().catch(() => ''),
-          listItemId
-        });
+
+    const targetSessions = userId
+      ? [[normalizeUserId(userId), sessions.get(normalizeUserId(userId))]].filter(([, s]) => s)
+      : Array.from(sessions.entries());
+
+    for (const [sessionUserId, session] of targetSessions) {
+      for (const [listItemId, group] of session.tabGroups) {
+        for (const [tabId, tabState] of group) {
+          tabs.push({
+            targetId: tabId,
+            tabId,
+            userId: sessionUserId,
+            url: tabState.page.url(),
+            title: await tabState.page.title().catch(() => ''),
+            listItemId,
+          });
+        }
       }
     }
-    
+
     res.json({ running: true, tabs });
   } catch (err) {
     log('error', 'list tabs failed', { reqId: req.reqId, error: err.message });
@@ -6029,6 +6145,9 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 const PORT = CONFIG.port;
 pluginEvents.emit('server:starting', { port: PORT });
 
+// Registry de actions expostas pelos plugins na UI
+const actionRegistry = new Map();
+
 // Load plugins before starting the server
 const pluginCtx = {
   sessions,
@@ -6054,11 +6173,74 @@ const pluginCtx = {
   createVirtualDisplay: () => new VirtualDisplay(),
   /** The upstream VirtualDisplay class -- plugins can subclass it. */
   VirtualDisplay,
+  /**
+   * Registra uma action executável pela UI.
+   * @param {string} name - Identificador único
+   * @param {{ label, description, fields, run }} action
+   *   fields: [{ name, label, type, required, placeholder, default }]
+   *   run: async (body, ctx) => ({ ok, ...result })
+   */
+  registerAction(name, action) {
+    actionRegistry.set(name, action);
+  },
 };
 const loadedPlugins = await loadPlugins(app, pluginCtx);
 
 // --- OpenAPI docs (after all routes are registered) ---
 mountDocs(app);
+
+// --- Actions registry (plugins registram via ctx.registerAction) ---
+app.get('/actions', (_req, res) => {
+  const actions = Array.from(actionRegistry.entries()).map(([name, a]) => ({
+    name,
+    label: a.label || name,
+    description: a.description || '',
+    fields: a.fields || [],
+  }));
+  res.json({ actions });
+});
+
+app.post('/actions/:name/run', async (req, res) => {
+  const action = actionRegistry.get(req.params.name);
+  if (!action) return res.status(404).json({ error: `Action "${req.params.name}" não encontrada` });
+  try {
+    const result = await action.run(req.body || {}, pluginCtx);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    log('error', 'action run failed', { action: req.params.name, error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- UI e rotas de capturas ---
+app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
+app.get('/ui', (_req, res) => res.sendFile(join(process.cwd(), 'public', 'ui.html')));
+app.get('/captures', async (_req, res) => {
+  try {
+    const screenshotsDir = join(process.cwd(), 'screenshots');
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(screenshotsDir, { withFileTypes: true });
+    } catch { /* pasta ainda não existe */ }
+
+    const captures = await Promise.all(
+      entries
+        .filter(e => e.isDirectory())
+        .map(async e => {
+          try {
+            const meta = JSON.parse(await fs.promises.readFile(join(screenshotsDir, e.name, 'metadata.json'), 'utf8'));
+            return meta;
+          } catch {
+            return { tabId: e.name };
+          }
+        })
+    );
+    captures.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+    res.json({ captures });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // --- Sentry Express error handler (after all routes, before app.listen) ---
 setupSentryErrorHandler(app);
